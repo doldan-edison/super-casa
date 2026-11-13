@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex,nofollow">
 <title>Súper de la casa</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0d6a57">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Súper">
+<meta name="mobile-web-app-capable" content="yes">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
 /* Layout: resumen del mes arriba (presupuesto vs gastado), debajo dos columnas: lista para comprar | compras como tickets */
@@ -130,6 +137,13 @@ body{margin:0;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-a
 .setup .f{display:grid;gap:4px}
 .hdr-actions{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .sync{font-size:.8rem;color:var(--muted)}
+.foto{display:grid;gap:10px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px dashed var(--line)}
+.foto .big{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px 14px;font-size:1rem;width:100%}
+@media (max-width:820px){.cols>section:last-child{order:-1}} /* en el celular, la cámara y las compras van primero */
+.pend{display:grid;gap:6px}
+.pend .row{display:flex;align-items:center;gap:10px;font-size:.88rem;padding:6px 10px;border-radius:8px;background:var(--warn-soft);color:var(--warn)}
+.pend .row span{flex:1;min-width:0}
+.pend .row button{padding:2px 8px;font-size:.8rem;color:inherit}
 </style>
 </head>
 <body>
@@ -196,7 +210,13 @@ body{margin:0;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-a
     </section>
 
     <section class="panel" aria-labelledby="h-compras">
-      <div class="colhead"><h2 id="h-compras">Compras del mes</h2><span class="hint">Pasale la foto de la factura a Claude y la carga con el detalle</span></div>
+      <div class="colhead"><h2 id="h-compras">Compras del mes</h2></div>
+      <div class="foto">
+        <button id="foto-btn" class="primary big" type="button">Sacar foto de una factura</button>
+        <input id="foto-input" type="file" accept="image/*" capture="environment" hidden>
+        <span class="small muted" id="foto-msg" role="status">La foto se guarda en tu Drive. Después Claude la lee y carga la compra con el detalle.</span>
+        <div class="pend" id="pend"></div>
+      </div>
       <form id="compra-form" class="compra" autocomplete="off">
         <div class="f"><label class="label" for="c-fecha">Fecha</label><input id="c-fecha" type="date" required></div>
         <div class="f wide"><label class="label" for="c-lugar">Dónde</label><input id="c-lugar" list="lugares" placeholder="Supermercado, despensa, feria…" required></div>
@@ -207,7 +227,7 @@ body{margin:0;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-a
         <datalist id="lugares"><option value="Stock"><option value="Superseis"><option value="Biggie"><option value="Salemma"><option value="Real"><option value="Casa Rica"><option value="Despensa del barrio"><option value="Feria"></datalist>
       </form>
       <div class="tickets" id="tickets"></div>
-      <div class="empty" id="tickets-empty">Todavía no hay compras este mes. Anotá la primera con el formulario o mandale la factura a Claude.</div>
+      <div class="empty" id="tickets-empty">Todavía no hay compras este mes. Sacale una foto a la factura o anotá el total con el formulario.</div>
     </section>
   </div>
   <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">
@@ -231,7 +251,7 @@ body{margin:0;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-a
   const today=new Date();
   const todayStr=today.getFullYear()+"-"+pad(today.getMonth()+1)+"-"+pad(today.getDate());
   let ym={y:today.getFullYear(),m:today.getMonth()};
-  let compras=[],lista=[],presupuesto=1500000,conn=null,busy=false;
+  let compras=[],lista=[],facturas=[],presupuesto=1500000,conn=null,busy=false;
 
   CATS.forEach(c=>{const o=document.createElement("option");o.value=c;o.textContent=c;$("c-cat").appendChild(o)});
   $("c-fecha").value=todayStr;
@@ -242,10 +262,49 @@ body{margin:0;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-a
   function saveConn(v){try{v?localStorage.setItem(LS,JSON.stringify(v)):localStorage.removeItem(LS)}catch(e){}}
 
   function aplicar(d){
-    compras=d.compras||[];lista=d.lista||[];presupuesto=+d.presupuesto>0?+d.presupuesto:1500000;
+    compras=d.compras||[];lista=d.lista||[];facturas=d.facturas||[];presupuesto=+d.presupuesto>0?+d.presupuesto:1500000;
     const t=new Date();$("sync").textContent="Actualizado "+pad(t.getHours())+":"+pad(t.getMinutes());
-    renderSummary();renderLista();
+    renderSummary();renderLista();renderPend();
   }
+
+  function renderPend(){
+    const box=$("pend");box.innerHTML="";
+    facturas.filter(f=>f.estado==="pendiente").sort((a,b)=>(b.creado||0)-(a.creado||0)).forEach(f=>{
+      const row=document.createElement("div");row.className="row";
+      const d=new Date(f.creado||Date.now());
+      const s=document.createElement("span");s.textContent="Foto del "+pad(d.getDate())+"/"+pad(d.getMonth()+1)+" a las "+pad(d.getHours())+":"+pad(d.getMinutes())+" · esperando que Claude la cargue";
+      const b=document.createElement("button");b.className="ghost";b.textContent="Borrar";
+      b.onclick=async()=>{if(b.dataset.ok){b.disabled=true;if(!await enviar({accion:"borrarFactura",id:f.id}))b.disabled=false}else{b.dataset.ok="1";b.textContent="¿Seguro?"}};
+      row.append(s,b);box.appendChild(row);
+    });
+  }
+
+  // Achica la foto antes de subirla: lado mayor 1800 px, JPEG. Alcanza para leer el ticket y sube rápido con datos móviles.
+  function achicar(file){
+    return new Promise((res,rej)=>{
+      const url=URL.createObjectURL(file);const img=new Image();
+      img.onload=()=>{
+        const k=Math.min(1,1800/Math.max(img.width,img.height));
+        const c=document.createElement("canvas");c.width=Math.round(img.width*k);c.height=Math.round(img.height*k);
+        c.getContext("2d").drawImage(img,0,0,c.width,c.height);URL.revokeObjectURL(url);
+        res(c.toDataURL("image/jpeg",.82).split(",")[1]);
+      };
+      img.onerror=()=>{URL.revokeObjectURL(url);rej(new Error("No se pudo leer la foto"))};
+      img.src=url;
+    });
+  }
+  $("foto-btn").onclick=()=>$("foto-input").click();
+  $("foto-input").addEventListener("change",async e=>{
+    const file=e.target.files&&e.target.files[0];e.target.value="";
+    if(!file)return;
+    const msg=$("foto-msg"),btn=$("foto-btn");
+    btn.disabled=true;msg.textContent="Subiendo la foto a tu Drive…";
+    try{
+      const imagen=await achicar(file);
+      msg.textContent=await enviar({accion:"subirFactura",imagen,mime:"image/jpeg"})?"Foto guardada. Claude la va a cargar con el detalle.":"La foto no se subió. Probá de nuevo cuando tengas señal.";
+    }catch(err){msg.textContent=(err.message||"No se pudo leer la foto")+". Probá sacarla de nuevo."}
+    btn.disabled=false;
+  });
   async function leer(c){
     const r=await fetch(c.url+"?clave="+encodeURIComponent(c.clave),{method:"GET"});
     const j=await r.json();if(!j.ok)throw new Error(j.error);return j.datos;
@@ -389,7 +448,7 @@ body{margin:0;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-a
   $("prev").onclick=()=>{ym.m--;if(ym.m<0){ym.m=11;ym.y--}renderSummary()};
   $("next").onclick=()=>{ym.m++;if(ym.m>11){ym.m=0;ym.y++}renderSummary()};
   $("refresh").onclick=refrescar;
-  $("disconnect").onclick=()=>{saveConn(null);conn=null;compras=[];lista=[];mostrar()};
+  $("disconnect").onclick=()=>{saveConn(null);conn=null;compras=[];lista=[];facturas=[];mostrar()};
   document.addEventListener("visibilitychange",()=>{if(!document.hidden)refrescar()});
 
   $("setup-form").addEventListener("submit",async e=>{
@@ -408,6 +467,7 @@ body{margin:0;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-a
 
   conn=loadConn();mostrar();renderSummary();renderLista();
   if(conn)refrescar();
+  if("serviceWorker" in navigator&&location.protocol==="https:")navigator.serviceWorker.register("sw.js").catch(()=>{});
 })();
 </script>
 </body>
